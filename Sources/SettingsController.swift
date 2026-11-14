@@ -12,10 +12,16 @@ final class SettingsController: NSWindowController, NSWindowDelegate {
     private let hint = NSTextField(wrappingLabelWithString: "")
     private let selectionLabel = NSTextField(labelWithString: "")
     private var picker: ApplicationPicker?
+    private let spacing = MenuBarSpacing()
+    private let spacingPicker = NSPopUpButton()
+    private let spacingCurrent = NSTextField(labelWithString: "")
+    private let spacingFeedback = NSTextField(wrappingLabelWithString: "")
+    private let applySpacingButton = NSButton()
+    private let restoreSpacingButton = NSButton()
 
     init(app: AppDelegate) {
         self.app = app
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: 660),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: 780),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "折叠菜单栏"
         window.isReleasedWhenClosed = false
@@ -31,6 +37,7 @@ final class SettingsController: NSWindowController, NSWindowDelegate {
 
     func show() {
         refresh()
+        refreshSpacingSelection()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -83,16 +90,23 @@ final class SettingsController: NSWindowController, NSWindowDelegate {
 
     private func buildContent() {
         guard let content = window?.contentView else { return }
+        let scroll = NSScrollView(frame: content.bounds)
+        scroll.autoresizingMask = [.width, .height]
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        let document = SettingsDocumentView(frame: content.bounds)
+        scroll.documentView = document
+        content.addSubview(scroll)
         let root = NSStackView()
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 20
         root.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(root)
+        document.addSubview(root)
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 32),
-            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -32),
-            root.topAnchor.constraint(equalTo: content.topAnchor, constant: 20)
+            root.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 32),
+            root.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -32),
+            root.topAnchor.constraint(equalTo: document.topAnchor, constant: 20)
         ])
 
         let title = label("让菜单栏清爽一点", size: 25, weight: .semibold)
@@ -155,6 +169,13 @@ final class SettingsController: NSWindowController, NSWindowDelegate {
         root.addArrangedSubview(line)
         line.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
 
+        addSpacingControls(to: root)
+
+        let spacingLine = NSBox()
+        spacingLine.boxType = .separator
+        root.addArrangedSubview(spacingLine)
+        spacingLine.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+
         for (title, seconds) in [("保持展开", 0), ("10 秒后", 10), ("30 秒后", 30), ("1 分钟后", 60)] {
             autoCollapse.addItem(withTitle: title)
             autoCollapse.lastItem?.tag = seconds
@@ -183,10 +204,96 @@ final class SettingsController: NSWindowController, NSWindowDelegate {
         root.addArrangedSubview(hint)
         hint.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
 
-        let version = label("MenuFold 0.1.6 · 本机运行", size: 11)
+        let version = label("MenuFold 0.1.7 · 本机运行", size: 11)
         version.textColor = .tertiaryLabelColor
         root.addArrangedSubview(version)
+        document.layoutSubtreeIfNeeded()
+        document.setFrameSize(NSSize(width: content.bounds.width, height: root.fittingSize.height + 44))
+        document.layoutSubtreeIfNeeded()
+        scroll.contentView.scroll(to: .zero)
         refresh()
+    }
+
+    private func addSpacingControls(to root: NSStackView) {
+        let section = NSStackView()
+        section.orientation = .vertical
+        section.alignment = .leading
+        section.spacing = 10
+        root.addArrangedSubview(section)
+        section.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        section.addArrangedSubview(label("第三方图标间距", size: 14, weight: .semibold))
+        spacingCurrent.font = .systemFont(ofSize: 12)
+        spacingCurrent.textColor = .secondaryLabelColor
+        section.addArrangedSubview(spacingCurrent)
+
+        for preset in MenuBarSpacing.presets {
+            spacingPicker.addItem(withTitle: preset.title)
+            spacingPicker.lastItem?.tag = preset.tag
+        }
+        spacingPicker.addItem(withTitle: "当前自定义配置")
+        spacingPicker.lastItem?.tag = 0
+        spacingPicker.target = self
+        spacingPicker.action = #selector(spacingSelectionChanged)
+        spacingPicker.widthAnchor.constraint(equalToConstant: 172).isActive = true
+        applySpacingButton.title = "应用间距"
+        applySpacingButton.bezelStyle = .rounded
+        applySpacingButton.target = self
+        applySpacingButton.action = #selector(applySpacing)
+        restoreSpacingButton.title = "恢复调整前"
+        restoreSpacingButton.bezelStyle = .rounded
+        restoreSpacingButton.target = self
+        restoreSpacingButton.action = #selector(restoreSpacing)
+        let controls = NSStackView(views: [spacingPicker, applySpacingButton, restoreSpacingButton])
+        controls.spacing = 8
+        section.addArrangedSubview(controls)
+
+        let scope = NSTextField(wrappingLabelWithString:
+            "作用于本机第三方应用图标。Wi-Fi、电池、时钟和控制中心的图标间距由 macOS 管理。保存后重新打开相关应用，或重新登录后生效。")
+        scope.font = .systemFont(ofSize: 12)
+        scope.textColor = .secondaryLabelColor
+        section.addArrangedSubview(scope)
+        scope.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
+        spacingFeedback.font = .systemFont(ofSize: 12)
+        spacingFeedback.textColor = .secondaryLabelColor
+        spacingFeedback.stringValue = "首次应用时自动保存调整前配置，支持恢复原值。"
+        section.addArrangedSubview(spacingFeedback)
+        spacingFeedback.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
+        refreshSpacingSelection()
+    }
+
+    private func refreshSpacingSelection() {
+        spacingCurrent.stringValue = "当前配置为\(spacing.currentDescription)"
+        spacingPicker.selectItem(withTag: spacing.currentTag)
+        spacingSelectionChanged()
+        restoreSpacingButton.isEnabled = spacing.hasBackup
+    }
+
+    @objc private func spacingSelectionChanged() {
+        applySpacingButton.isEnabled = spacingPicker.selectedTag() != 0
+    }
+
+    @objc private func applySpacing() {
+        guard let preset = MenuBarSpacing.presets.first(where: { $0.tag == spacingPicker.selectedTag() }) else { return }
+        do {
+            try spacing.apply(preset)
+            spacingFeedback.stringValue = "已保存\(preset.title)。重新打开相关应用或重新登录后生效。"
+        } catch { showSpacingError(error) }
+        refreshSpacingSelection()
+    }
+
+    @objc private func restoreSpacing() {
+        do {
+            try spacing.restoreOriginal()
+            spacingFeedback.stringValue = "已恢复调整前配置。重新打开相关应用或重新登录后生效。"
+        } catch { showSpacingError(error) }
+        refreshSpacingSelection()
+    }
+
+    private func showSpacingError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "间距设置未完成"
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
     }
 
     @objc private func toggle() { app.finishArranging() }
@@ -195,6 +302,10 @@ final class SettingsController: NSWindowController, NSWindowDelegate {
     @objc private func changeStartup() { app.collapseAtLaunch = startCollapsed.state == .on }
     @objc private func changeLogin() { app.setLaunchAtLogin(login.state == .on) }
     @objc private func changeHover() { app.expandOnHover = hover.state == .on }
+}
+
+private final class SettingsDocumentView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 @MainActor
